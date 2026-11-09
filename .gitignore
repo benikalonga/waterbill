@@ -1,0 +1,49 @@
+node_modules/
+.next/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+
+.env
+.env.*
+!.env.example
+
+uploads/
+logs/
+*.log
+.DS_Store
+
+# Dependencies and builds
+out/
+build/
+coverage/
+.expo/
+mobile/ios/
+mobile/android/
+
+# Secrets and local settings
+*.pem
+*.key
+*.p12
+*.keystore
+
+# Local data
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+backups/
+*.zip
+
+# Logs, caches and system files
+npm-debug.log*
+.cache/
+tmp/
+Thumbs.db
+.idea/
+.vscode/
+
+# AI assistant files
+.claude/
+CLAUDE.md

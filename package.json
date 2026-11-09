@@ -1,0 +1,16 @@
+{
+  "name": "waterbill",
+  "private": true,
+  "version": "1.0.0",
+  "description": "WaterBill: billing, customer care and network operations for water utilities",
+  "workspaces": ["api", "web"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev:api": "npm run dev -w api",
+    "dev:web": "npm run dev -w web",
+    "build": "npm run build -w api && npm run build -w web",
+    "test": "npm test -w api",
+    "db:push": "npm run db:push -w api",
+    "db:seed": "npm run db:seed -w api"
+  }
+}

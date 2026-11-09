@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body { @apply bg-mist text-slate2 antialiased; }
+  input, select, textarea { font-size: 16px; }
+  @media (min-width: 640px) { input, select, textarea { font-size: 14px; } }
+}
+
+@layer components {
+  .btn { @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50; }
+  .btn-primary { @apply bg-tide-600 text-white hover:bg-tide-700; }
+  .btn-dark { @apply bg-slate2 text-white hover:bg-slate2-2; }
+  .btn-ghost { @apply border border-edge bg-white text-slate2 hover:bg-mist; }
+  .btn-soft { @apply bg-tide-50 text-tide-700 hover:bg-tide-100; }
+  .btn-danger { @apply bg-red-600 text-white hover:bg-red-700; }
+  .input { @apply w-full rounded-lg border border-edge bg-white px-3 py-2.5 outline-none focus:border-tide-400 focus:ring-2 focus:ring-tide-100; }
+}
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: #fff; }
+}

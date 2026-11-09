@@ -1,0 +1,962 @@
+// WaterBill data model.
+// Money is stored as integer cents and water volume as integer litres, so
+// billing arithmetic never suffers from rounding drift.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Identity ─────────────────────────────────────────────────────────────────
+
+enum StaffRole {
+  ADMIN
+  EXECUTIVE
+  COMMERCIAL_MANAGER
+  TECHNICAL_MANAGER
+  BRANCH_MANAGER
+  BILLING_CLERK
+  COLLECTIONS_OFFICER
+  FIELD_AGENT
+  AUDITOR
+}
+
+enum AgentTrade {
+  METER_READER
+  COLLECTOR
+  INSPECTOR
+  NETWORK_TECHNICIAN
+  SUPERVISOR
+}
+
+model Staff {
+  id           String      @id @default(cuid())
+  email        String      @unique @db.VarChar(191)
+  fullName     String      @db.VarChar(120)
+  phone        String?     @db.VarChar(30)
+  passwordHash String      @db.VarChar(100)
+  role         StaffRole
+  trade        AgentTrade?
+  branchId     String?
+  isActive     Boolean     @default(true)
+  lastLoginAt  DateTime?
+  lastLat      Float?
+  lastLng      Float?
+  lastSeenAt   DateTime?
+  createdAt    DateTime    @default(now())
+
+  branch        Branch?        @relation(fields: [branchId], references: [id])
+  workOrders    WorkOrder[]
+  tickets       Ticket[]
+  notifications Notification[]
+  audit         AuditEntry[]
+
+  @@index([role, isActive])
+}
+
+model RefreshSession {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique @db.Char(64)
+  staffId   String?
+  customerId String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+// ─── Customers ────────────────────────────────────────────────────────────────
+
+enum CustomerType {
+  HOUSEHOLD
+  BUSINESS
+  INDUSTRY
+  INSTITUTION
+  GOVERNMENT
+  NGO
+  PUBLIC_STANDPIPE
+}
+
+enum TariffClass {
+  LIFELINE
+  STANDARD
+  COMMERCIAL
+  INDUSTRIAL
+}
+
+enum AccountStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  DISCONNECTED
+  CLOSED
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model Customer {
+  id            String        @id @default(cuid())
+  accountNumber String        @unique @db.VarChar(20)
+  firstName     String        @db.VarChar(100)
+  lastName      String        @db.VarChar(100)
+  phone         String        @db.VarChar(30)
+  email         String?       @db.VarChar(191)
+  type          CustomerType
+  tariffClass   TariffClass
+  addressLine   String        @db.VarChar(255)
+  neighborhood  String        @db.VarChar(100)
+  district      String        @db.VarChar(100)
+  city          String        @db.VarChar(100)
+  region        String        @db.VarChar(100)
+  lat           Float?
+  lng           Float?
+  zoneId        String?
+
+  pinHash       String?       @db.VarChar(100)
+  mustChangePin Boolean       @default(true)
+  failedPins    Int           @default(0)
+  lockedUntil   DateTime?
+
+  status        AccountStatus @default(PENDING)
+  selfRegistered Boolean      @default(false)
+  review        ReviewStatus  @default(PENDING)
+  reviewNotes   Json?
+  reviewedById  String?
+  reviewedAt    DateTime?
+
+  creditCents        Int      @default(0)
+  pendingFeesCents   Int      @default(0)
+  monthlyLimitLitres Int?
+  paperless          Boolean  @default(true)
+  smsReminders       Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  zone          Zone?          @relation(fields: [zoneId], references: [id])
+  meter         Meter?
+  codes         OneTimeCode[]
+  invoices      Invoice[]
+  payments      Payment[]
+  plans         PaymentPlan[]
+  tickets       Ticket[]
+  alerts        Alert[]
+  workOrders    WorkOrder[]
+  notifications Notification[]
+  leaksReported Leak[]
+
+  @@index([status])
+  @@index([review])
+  @@index([phone])
+}
+
+model OneTimeCode {
+  id         String    @id @default(cuid())
+  customerId String
+  codeHash   String    @db.Char(64)
+  purpose    String    @db.VarChar(20)
+  attempts   Int       @default(0)
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId, usedAt])
+}
+
+// ─── Meters ───────────────────────────────────────────────────────────────────
+
+enum MeterKind {
+  MECHANICAL
+  ELECTRONIC
+  SMART
+}
+
+enum MeterLink {
+  MANUAL
+  LORAWAN
+  GSM
+  NBIOT
+  ZIGBEE
+}
+
+enum MeterStatus {
+  ACTIVE
+  FAULTY
+  MAINTENANCE
+  TAMPERED
+  REPLACED
+  INACTIVE
+}
+
+model Meter {
+  id               String      @id @default(cuid())
+  serial           String      @unique @db.VarChar(60)
+  customerId       String?     @unique
+  kind             MeterKind
+  link             MeterLink   @default(MANUAL)
+  brand            String      @db.VarChar(60)
+  model            String      @db.VarChar(60)
+  diameterMm       Int         @default(15)
+  installedAt      DateTime
+  calibratedAt     DateTime?
+  calibrationDueAt DateTime?
+  lat              Float?
+  lng              Float?
+  status           MeterStatus @default(ACTIVE)
+  initialLitres    Int         @default(0)
+  lastLitres       Int         @default(0)
+  batteryPct       Int?
+  rssi             Int?
+  lastSeenAt       DateTime?
+  createdAt        DateTime    @default(now())
+
+  customer Customer?      @relation(fields: [customerId], references: [id])
+  readings MeterReading[]
+  alerts   Alert[]
+
+  @@index([status])
+}
+
+enum ReadingSource {
+  SMART_METER
+  FIELD_AGENT
+  CUSTOMER
+}
+
+enum ReadingStatus {
+  ACCEPTED
+  PENDING_REVIEW
+  REJECTED
+}
+
+model MeterReading {
+  id          String        @id @default(cuid())
+  meterId     String
+  totalLitres Int
+  usageLitres Int
+  readAt      DateTime
+  source      ReadingSource
+  status      ReadingStatus @default(ACCEPTED)
+  agentId     String?
+  lat         Float?
+  lng         Float?
+  photoUrl    String?       @db.VarChar(500)
+  flagged     Boolean       @default(false)
+  flagReason  String?       @db.VarChar(200)
+  createdAt   DateTime      @default(now())
+
+  meter Meter @relation(fields: [meterId], references: [id])
+
+  @@index([meterId, readAt])
+  @@index([status])
+}
+
+// ─── Network ──────────────────────────────────────────────────────────────────
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum Condition {
+  GOOD
+  FAIR
+  POOR
+  CRITICAL
+}
+
+enum PipeTier {
+  TRANSMISSION
+  DISTRIBUTION
+  SERVICE
+}
+
+enum EquipmentStatus {
+  RUNNING
+  SCHEDULED_STOP
+  FAULT
+  MAINTENANCE
+}
+
+model Branch {
+  id         String  @id @default(cuid())
+  code       String  @unique @db.VarChar(20)
+  name       String  @db.VarChar(120)
+  city       String  @db.VarChar(100)
+  region     String  @db.VarChar(100)
+  lat        Float
+  lng        Float
+  capacityM3 Int
+  isActive   Boolean @default(true)
+
+  staff     Staff[]
+  zones     Zone[]
+  pipelines Pipeline[]
+  stations  PumpStation[]
+}
+
+model Zone {
+  id         String    @id @default(cuid())
+  branchId   String
+  code       String    @unique @db.VarChar(20)
+  name       String    @db.VarChar(120)
+  population Int?
+  risk       RiskLevel @default(LOW)
+
+  branch    Branch     @relation(fields: [branchId], references: [id])
+  customers Customer[]
+  outages   Outage[]
+}
+
+model Pipeline {
+  id              String    @id @default(cuid())
+  branchId        String
+  code            String    @unique @db.VarChar(20)
+  tier            PipeTier
+  material        String    @db.VarChar(60)
+  diameterMm      Int
+  lengthM         Int
+  installedYear   Int?
+  condition       Condition @default(GOOD)
+  lastInspectedAt DateTime?
+
+  branch Branch @relation(fields: [branchId], references: [id])
+  leaks  Leak[]
+}
+
+model PumpStation {
+  id            String          @id @default(cuid())
+  branchId      String
+  code          String          @unique @db.VarChar(20)
+  name          String          @db.VarChar(120)
+  capacityM3H   Int
+  powerKw       Int
+  status        EquipmentStatus @default(RUNNING)
+  lat           Float
+  lng           Float
+  lastServiceAt DateTime?
+  nextServiceAt DateTime?
+
+  branch   Branch           @relation(fields: [branchId], references: [id])
+  readings StationReading[]
+}
+
+model StationReading {
+  id          String   @id @default(cuid())
+  stationId   String
+  recordedAt  DateTime
+  producedM3  Int
+  pressureBar Float
+  reservoirPct Float?
+  energyKwh   Float?
+  ph          Float?
+  turbidity   Float?
+
+  station PumpStation @relation(fields: [stationId], references: [id])
+
+  @@index([stationId, recordedAt])
+}
+
+enum DetectionSource {
+  SENSOR
+  FIELD_AGENT
+  CUSTOMER_REPORT
+  ANALYTICS
+  INSPECTION
+}
+
+enum LeakStatus {
+  REPORTED
+  CONFIRMED
+  IN_REPAIR
+  REPAIRED
+  CLOSED
+}
+
+enum Priority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+model Leak {
+  id                   String          @id @default(cuid())
+  pipelineId           String?
+  reportedByCustomerId String?
+  source               DetectionSource
+  lat                  Float?
+  lng                  Float?
+  address              String          @db.VarChar(255)
+  description          String?         @db.Text
+  lossM3H              Float?
+  status               LeakStatus      @default(REPORTED)
+  priority             Priority        @default(HIGH)
+  workOrderId          String?         @unique
+  reportedAt           DateTime        @default(now())
+  repairedAt           DateTime?
+
+  pipeline  Pipeline?  @relation(fields: [pipelineId], references: [id])
+  reporter  Customer?  @relation(fields: [reportedByCustomerId], references: [id])
+  workOrder WorkOrder? @relation(fields: [workOrderId], references: [id])
+
+  @@index([status, priority])
+}
+
+enum IllegalStatus {
+  DETECTED
+  VERIFYING
+  CONFIRMED
+  PENALIZED
+  REGULARIZED
+  DISPUTED
+}
+
+model IllegalConnection {
+  id                 String          @id @default(cuid())
+  zoneId             String?
+  lat                Float?
+  lng                Float?
+  address            String          @db.VarChar(255)
+  source             DetectionSource
+  status             IllegalStatus   @default(DETECTED)
+  lossM3H            Float?
+  estimatedLossCents Int?
+  reportedById       String?
+  caseFile           String?         @db.VarChar(120)
+  notes              String?         @db.Text
+  detectedAt         DateTime        @default(now())
+  resolvedAt         DateTime?
+
+  @@index([status])
+}
+
+enum OutageKind {
+  PLANNED
+  EMERGENCY
+  WATER_QUALITY
+}
+
+enum OutageStatus {
+  SCHEDULED
+  ACTIVE
+  RESOLVED
+  CANCELLED
+}
+
+model Outage {
+  id          String       @id @default(cuid())
+  zoneId      String?
+  kind        OutageKind
+  title       String       @db.VarChar(160)
+  message     String       @db.Text
+  startsAt    DateTime
+  endsAt      DateTime?
+  status      OutageStatus @default(SCHEDULED)
+  createdById String
+  createdAt   DateTime     @default(now())
+
+  zone Zone? @relation(fields: [zoneId], references: [id])
+
+  @@index([status, startsAt])
+}
+
+// ─── Billing ──────────────────────────────────────────────────────────────────
+
+model TariffRule {
+  tariffClass      TariffClass @id
+  fixedChargeCents Int
+  vatBps           Int         @default(1600)
+  updatedAt        DateTime    @updatedAt
+
+  bands TariffBand[]
+}
+
+model TariffBand {
+  id          String      @id @default(cuid())
+  tariffClass TariffClass
+  fromM3      Int
+  toM3        Int?
+  centsPerM3  Int
+
+  rule TariffRule @relation(fields: [tariffClass], references: [tariffClass], onDelete: Cascade)
+
+  @@unique([tariffClass, fromM3])
+}
+
+model BillingRun {
+  id          String    @id @default(cuid())
+  period      String    @unique @db.Char(7)
+  createdById String
+  created     Int       @default(0)
+  skipped     Int       @default(0)
+  estimated   Int       @default(0)
+  totalCents  Int       @default(0)
+  startedAt   DateTime  @default(now())
+  finishedAt  DateTime?
+
+  invoices Invoice[]
+}
+
+enum InvoiceBasis {
+  ACTUAL
+  ESTIMATED
+  FLAT
+}
+
+enum InvoiceStatus {
+  ISSUED
+  PARTIAL
+  PAID
+  OVERDUE
+  DISPUTED
+  VOID
+  COLLECTIONS
+}
+
+model Invoice {
+  id            String        @id @default(cuid())
+  number        String        @unique @db.VarChar(24)
+  customerId    String
+  period        String        @db.Char(7)
+  issuedAt      DateTime      @default(now())
+  dueAt         DateTime
+  openingLitres Int
+  closingLitres Int
+  usageLitres   Int
+  basis         InvoiceBasis
+  usageCents    Int
+  fixedCents    Int
+  vatCents      Int
+  feeCents      Int           @default(0)
+  penaltyCents  Int           @default(0)
+  totalCents    Int
+  paidCents     Int           @default(0)
+  balanceCents  Int
+  status        InvoiceStatus @default(ISSUED)
+  lines         Json
+  billingRunId  String?
+  note          String?       @db.VarChar(255)
+  createdAt     DateTime      @default(now())
+
+  customer Customer      @relation(fields: [customerId], references: [id])
+  run      BillingRun?   @relation(fields: [billingRunId], references: [id])
+  payments Payment[]
+  tickets  Ticket[]
+  plans    PaymentPlan[]
+
+  @@unique([customerId, period])
+  @@index([status, dueAt])
+}
+
+enum PaymentChannel {
+  MPESA
+  AIRTEL_MONEY
+  ORANGE_MONEY
+  MTN_MOMO
+  BANK_TRANSFER
+  CARD
+  KIOSK
+  COUNTER
+  ACCOUNT_CREDIT
+}
+
+enum PaymentStatus {
+  PROCESSING
+  CONFIRMED
+  FAILED
+  REFUNDED
+}
+
+model Payment {
+  id           String         @id @default(cuid())
+  reference    String         @unique @db.VarChar(24)
+  externalRef  String?        @unique @db.VarChar(120)
+  customerId   String
+  invoiceId    String?
+  amountCents  Int
+  channel      PaymentChannel
+  payerPhone   String?        @db.VarChar(30)
+  status       PaymentStatus  @default(PROCESSING)
+  recordedById String?
+  initiatedAt  DateTime       @default(now())
+  confirmedAt  DateTime?
+
+  customer Customer @relation(fields: [customerId], references: [id])
+  invoice  Invoice? @relation(fields: [invoiceId], references: [id])
+
+  @@index([customerId, status])
+  @@index([initiatedAt])
+}
+
+enum PlanStatus {
+  REQUESTED
+  ACTIVE
+  COMPLETED
+  DEFAULTED
+  DECLINED
+}
+
+model PaymentPlan {
+  id           String     @id @default(cuid())
+  customerId   String
+  invoiceId    String
+  totalCents   Int
+  months       Int
+  status       PlanStatus @default(REQUESTED)
+  reason       String?    @db.VarChar(255)
+  decidedById  String?
+  decidedAt    DateTime?
+  createdAt    DateTime   @default(now())
+
+  customer     Customer          @relation(fields: [customerId], references: [id])
+  invoice      Invoice           @relation(fields: [invoiceId], references: [id])
+  installments PlanInstallment[]
+
+  @@index([status])
+}
+
+model PlanInstallment {
+  id          String   @id @default(cuid())
+  planId      String
+  seq         Int
+  dueAt       DateTime
+  amountCents Int
+  paidCents   Int      @default(0)
+
+  plan PaymentPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, seq])
+}
+
+// ─── Alerts, work and support ─────────────────────────────────────────────────
+
+enum AlertKind {
+  HIGH_USAGE
+  LOW_USAGE
+  NIGHT_FLOW
+  METER_STOPPED
+  METER_TAMPERED
+  REVERSE_FLOW
+  SIGNAL_LOST
+  LOW_BATTERY
+  STATION_FAULT
+  LOW_COLLECTION
+  ILLEGAL_CONNECTION
+  LOW_STOCK
+  SERVICE_DUE
+}
+
+enum Severity {
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AlertStatus {
+  NEW
+  IN_PROGRESS
+  RESOLVED
+  DISMISSED
+}
+
+model Alert {
+  id         String      @id @default(cuid())
+  kind       AlertKind
+  severity   Severity
+  title      String      @db.VarChar(200)
+  detail     String      @db.Text
+  status     AlertStatus @default(NEW)
+  customerId String?
+  meterId    String?
+  assigneeId String?
+  metric     Float?
+  threshold  Float?
+  ackAt      DateTime?
+  resolvedAt DateTime?
+  resolution String?     @db.Text
+  createdAt  DateTime    @default(now())
+
+  customer Customer? @relation(fields: [customerId], references: [id])
+  meter    Meter?    @relation(fields: [meterId], references: [id])
+
+  @@index([status, severity])
+  @@index([meterId, kind, status])
+}
+
+enum WorkKind {
+  LEAK_REPAIR
+  METER_REPLACEMENT
+  METER_READING
+  FRAUD_CHECK
+  PREVENTIVE_MAINTENANCE
+  NEW_CONNECTION
+  DISCONNECTION
+  RECONNECTION
+}
+
+enum WorkStatus {
+  OPEN
+  ASSIGNED
+  ACCEPTED
+  IN_PROGRESS
+  DONE
+  CANCELLED
+}
+
+model WorkOrder {
+  id           String     @id @default(cuid())
+  number       String     @unique @db.VarChar(24)
+  kind         WorkKind
+  priority     Priority   @default(NORMAL)
+  status       WorkStatus @default(OPEN)
+  assigneeId   String?
+  customerId   String?
+  address      String     @db.VarChar(255)
+  lat          Float?
+  lng          Float?
+  description  String     @db.Text
+  scheduledFor DateTime?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  report       String?    @db.Text
+  createdAt    DateTime   @default(now())
+
+  assignee Staff?          @relation(fields: [assigneeId], references: [id])
+  customer Customer?       @relation(fields: [customerId], references: [id])
+  leak     Leak?
+  stock    StockMovement[]
+
+  @@index([assigneeId, status])
+  @@index([status])
+}
+
+enum TicketTopic {
+  BILL_DISPUTE
+  WRONGFUL_DISCONNECTION
+  LEAK
+  WATER_QUALITY
+  NEW_CONNECTION
+  OTHER
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+  REJECTED
+}
+
+model Ticket {
+  id          String       @id @default(cuid())
+  number      String       @unique @db.VarChar(24)
+  customerId  String
+  invoiceId   String?
+  topic       TicketTopic
+  subject     String       @db.VarChar(160)
+  status      TicketStatus @default(OPEN)
+  priority    Priority     @default(NORMAL)
+  assigneeId  String?
+  slaDueAt    DateTime
+  resolvedAt  DateTime?
+  resolution  String?      @db.Text
+  rating      Int?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  customer Customer        @relation(fields: [customerId], references: [id])
+  invoice  Invoice?        @relation(fields: [invoiceId], references: [id])
+  assignee Staff?          @relation(fields: [assigneeId], references: [id])
+  messages TicketMessage[]
+
+  @@index([customerId, status])
+  @@index([status, slaDueAt])
+}
+
+model TicketMessage {
+  id         String   @id @default(cuid())
+  ticketId   String
+  fromStaff  Boolean
+  authorName String   @db.VarChar(120)
+  body       String   @db.Text
+  createdAt  DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, createdAt])
+}
+
+model Notification {
+  id         String    @id @default(cuid())
+  customerId String?
+  staffId    String?
+  title      String    @db.VarChar(160)
+  body       String    @db.Text
+  kind       String    @db.VarChar(30)
+  link       String?   @db.VarChar(200)
+  readAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  staff    Staff?    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@index([customerId, readAt])
+  @@index([staffId, readAt])
+}
+
+// ─── Back office ──────────────────────────────────────────────────────────────
+
+enum EmploymentStatus {
+  ACTIVE
+  ON_LEAVE
+  SUSPENDED
+  RETIRED
+  RESIGNED
+}
+
+model Employee {
+  id          String           @id @default(cuid())
+  code        String           @unique @db.VarChar(20)
+  firstName   String           @db.VarChar(100)
+  lastName    String           @db.VarChar(100)
+  birthDate   DateTime?
+  hiredAt     DateTime
+  jobTitle    String           @db.VarChar(120)
+  department  String           @db.VarChar(120)
+  branchId    String?
+  salaryCents Int
+  status      EmploymentStatus @default(ACTIVE)
+
+  payslips Payslip[]
+  leave    LeaveRequest[]
+}
+
+enum PayslipStatus {
+  DRAFT
+  APPROVED
+  PAID
+}
+
+model Payslip {
+  id             String        @id @default(cuid())
+  employeeId     String
+  period         String        @db.Char(7)
+  grossCents     Int
+  bonusCents     Int           @default(0)
+  deductionCents Int           @default(0)
+  netCents       Int
+  status         PayslipStatus @default(DRAFT)
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, period])
+}
+
+enum LeaveKind {
+  ANNUAL
+  SICK
+  MATERNITY
+  SPECIAL
+  UNPAID
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  DECLINED
+  CANCELLED
+}
+
+model LeaveRequest {
+  id         String      @id @default(cuid())
+  employeeId String
+  kind       LeaveKind
+  startsOn   DateTime
+  endsOn     DateTime
+  status     LeaveStatus @default(PENDING)
+  reason     String?     @db.VarChar(255)
+  createdAt  DateTime    @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+}
+
+enum StockCategory {
+  SPARE_PART
+  METER
+  CHEMICAL
+  SAFETY_GEAR
+  CONSUMABLE
+}
+
+model StockItem {
+  id        String        @id @default(cuid())
+  sku       String        @unique @db.VarChar(40)
+  name      String        @db.VarChar(160)
+  category  StockCategory
+  unit      String        @db.VarChar(20)
+  onHand    Int           @default(0)
+  minLevel  Int           @default(0)
+  unitCents Int
+  supplier  String?       @db.VarChar(120)
+
+  movements StockMovement[]
+}
+
+enum MovementKind {
+  RECEIPT
+  ISSUE
+  RETURN
+  ADJUSTMENT
+}
+
+model StockMovement {
+  id          String       @id @default(cuid())
+  itemId      String
+  kind        MovementKind
+  quantity    Int
+  reason      String       @db.VarChar(255)
+  workOrderId String?
+  staffId     String?
+  createdAt   DateTime     @default(now())
+
+  item      StockItem  @relation(fields: [itemId], references: [id])
+  workOrder WorkOrder? @relation(fields: [workOrderId], references: [id])
+
+  @@index([itemId, createdAt])
+}
+
+model AuditEntry {
+  id        String   @id @default(cuid())
+  staffId   String
+  action    String   @db.VarChar(60)
+  entity    String   @db.VarChar(40)
+  entityId  String?  @db.VarChar(40)
+  detail    Json?
+  createdAt DateTime @default(now())
+
+  staff Staff @relation(fields: [staffId], references: [id])
+
+  @@index([createdAt])
+  @@index([entity, entityId])
+}
+
+model Setting {
+  key   String @id @db.VarChar(40)
+  value String @db.VarChar(255)
+}
